@@ -297,17 +297,17 @@ def xlsb_export_supported() -> bool:
 # UI
 # ========================================================================================
 
-st.title("THC Data Merger")
+st.title("🔀 THC Data Merger")
 st.caption("Gabungkan beberapa file transaksi THC bulanan (mentah/data awal) jadi satu file rapi.")
 
-with st.expander("Cara pakai (tutorial)", expanded=True):
+with st.expander("📖 Cara pakai (tutorial)", expanded=True):
     st.markdown(
         """
 1. **Download file** `.xlsb` atau tarikan langsung dari **MDIS** (biasanya bentuk `.xls`) — bisa juga `.xlsx` atau `.csv`.
 2. **Upload beberapa file** sekaligus (per bulan) di kotak upload di bawah, lalu klik **Proses & Gabungkan**.
-3. **Hasil output ada 2 file:**
-   - 1 file hasil **merge/gabungan lengkap** — `THC-MMYYYY-MMYYYY.xlsx`
-   - 1 file khusus transaksi yang **Document No.-nya kosong (N/A)** — `THC-NA-MMYYYY-MMYYYY.xlsx`
+3. **Hasil output ada 2 file (saling terpisah, tidak dobel):**
+   - Transaksi yang **Document No.-nya terisi** — `THC-MMYYYY-MMYYYY.xlsx`
+   - Transaksi yang **Document No.-nya kosong (N/A)** — `THC-NA-MMYYYY-MMYYYY.xlsx`
 
    Contoh: `THC-012026-082026.xlsx` (data dari Januari 2026 s/d Agustus 2026).
 
@@ -324,7 +324,7 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
-process_clicked = st.button("Proses & Gabungkan", type="primary", disabled=not uploaded_files)
+process_clicked = st.button("🚀 Proses & Gabungkan", type="primary", disabled=not uploaded_files)
 
 if process_clicked and uploaded_files:
     all_records = []
@@ -366,7 +366,7 @@ if process_clicked and uploaded_files:
         merged_filename_base = f"THC-{start_label}-{end_label}"
         na_filename_base = f"THC-NA-{start_label}-{end_label}"
 
-        st.session_state["merged_df"] = full_df[OUTPUT_COLUMNS]
+        st.session_state["merged_df"] = with_doc_df[OUTPUT_COLUMNS]
         st.session_state["na_df"] = na_doc_df[OUTPUT_COLUMNS]
         st.session_state["merged_name"] = merged_filename_base
         st.session_state["na_name"] = na_filename_base
@@ -390,7 +390,7 @@ if "merged_df" in st.session_state:
     c3.metric("Document No. kosong", f'{stats["na_doc"]:,}')
     c4.metric("Periode", stats["period"])
 
-    tab1, tab2 = st.tabs(["📄 Hasil Merge (lengkap)", "🚫 Document No. Kosong (N/A)"])
+    tab1, tab2 = st.tabs(["📄 Document No. Terisi", "🚫 Document No. Kosong (N/A)"])
 
     with tab1:
         st.dataframe(st.session_state["merged_df"], use_container_width=True, height=350)
@@ -442,7 +442,7 @@ if "merged_df" in st.session_state:
             else:
                 st.button("📘 .xlsb tidak tersedia", disabled=True, use_container_width=True, key=f"xlsb_disabled_{base_name}")
 
-    download_section("Hasil Merge (lengkap)", st.session_state["merged_df"], st.session_state["merged_name"])
+    download_section("Document No. Terisi", st.session_state["merged_df"], st.session_state["merged_name"])
     st.write("")
     download_section("Document No. Kosong (N/A)", st.session_state["na_df"], st.session_state["na_name"])
 
