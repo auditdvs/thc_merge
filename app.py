@@ -262,13 +262,27 @@ def _soffice_binary():
 # Export ke .xlsb lewat Excel Converter API sendiri (SheetJS backend -> punya writer xlsb asli)
 # ----------------------------------------------------------------------------------------
 EXCEL_API_BASE = "https://affogateo-excelconverter.hf.space"
+EXCEL_API_WAKE_TIMEOUT = 60          # buat "bangunin" HF Space yang lagi sleeping/restart
+EXCEL_API_CONVERT_TIMEOUT = 600      # konversi bisa lama untuk data ratusan ribu baris
 
 
-def convert_via_excel_api(xlsx_bytes: bytes, base_filename: str, target_format: str = "xlsb", timeout: int = 90) -> bytes:
+def _wake_excel_api():
+    """Ping ringan dulu supaya HF Space (kalau lagi sleeping/restart) sempat nyala
+    sebelum kita kirim file besar. Kegagalan di sini diabaikan -> tetap lanjut ke convert."""
+    try:
+        requests.get(EXCEL_API_BASE, timeout=EXCEL_API_WAKE_TIMEOUT)
+    except requests.exceptions.RequestException:
+        pass
+
+
+def convert_via_excel_api(xlsx_bytes: bytes, base_filename: str, target_format: str = "xlsb",
+                           timeout: int = EXCEL_API_CONVERT_TIMEOUT) -> bytes:
     """
     Panggil backend Excel Converter API (POST /api/convert/excel lalu GET /api/download/...).
-    Raise Exception dengan pesan jelas kalau gagal (space bisa lagi 'sleeping' -> perlu waktu bangun).
+    Raise Exception dengan pesan jelas kalau gagal.
     """
+    _wake_excel_api()
+
     files = {
         "file": (
             f"{base_filename}.xlsx",
@@ -278,7 +292,15 @@ def convert_via_excel_api(xlsx_bytes: bytes, base_filename: str, target_format: 
     }
     data = {"targetFormat": target_format}
 
-    resp = requests.post(f"{EXCEL_API_BASE}/api/convert/excel", files=files, data=data, timeout=timeout)
+    try:
+        resp = requests.post(f"{EXCEL_API_BASE}/api/convert/excel", files=files, data=data, timeout=timeout)
+    except requests.exceptions.ReadTimeout:
+        raise RuntimeError(
+            f"Server tidak merespons dalam {timeout}s. Untuk data sebesar ini (ribuan baris), "
+            "server mungkin masih memproses di belakang layar — coba klik 'Convert ulang' beberapa saat lagi."
+        )
+    except requests.exceptions.ConnectionError as e:
+        raise RuntimeError(f"Tidak bisa terhubung ke server konversi: {e}")
 
     try:
         payload = resp.json()
@@ -297,6 +319,7 @@ def convert_via_excel_api(xlsx_bytes: bytes, base_filename: str, target_format: 
     dl = requests.get(f"{EXCEL_API_BASE}/api/download/{conversion_id}/{out_filename}", timeout=timeout)
     dl.raise_for_status()
     return dl.content
+
 
 
 def to_xlsb_bytes_local(df: pd.DataFrame):
@@ -427,15 +450,15 @@ if "merged_df" in st.session_state:
     tab1, tab2 = st.tabs(["📄 Document No. Terisi", "🚫 Document No. Kosong (N/A)"])
 
     with tab1:
-        st.dataframe(st.session_state["merged_df"], use_container_width=True, height=350)
+        st.dataframe(st.session_state["merged_df"], width="stretch", height=350)
     with tab2:
-        st.dataframe(st.session_state["na_df"], use_container_width=True, height=350)
+        st.dataframe(st.session_state["na_df"], width="stretch", height=350)
 
     st.divider()
     st.subheader("⬇️ Download")
     st.caption(
-        "Export **.xlsb** dilakukan lewat Excel Converter API. Kalau baru pertama kali dipakai "
-        "(space lagi 'tidur'), proses convert bisa makan waktu sampai ~1 menit untuk 'membangunkan' server-nya."
+        "Export **.xlsb** dilakukan lewat Excel Converter API. Untuk data besar (ratusan ribu baris) "
+        "proses ini bisa makan waktu beberapa menit — termasuk kalau server-nya perlu 'bangun' dulu."
     )
 
     def download_section(label, df, base_name):
@@ -447,7 +470,7 @@ if "merged_df" in st.session_state:
                 data=to_xlsx_bytes(df),
                 file_name=f"{base_name}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
                 key=f"xlsx_{base_name}",
             )
         with col_c:
@@ -456,7 +479,7 @@ if "merged_df" in st.session_state:
                 data=to_csv_bytes(df),
                 file_name=f"{base_name}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
                 key=f"csv_{base_name}",
             )
         with col_b:
@@ -467,16 +490,16 @@ if "merged_df" in st.session_state:
                     data=st.session_state[xlsb_state_key],
                     file_name=f"{base_name}.xlsb",
                     mime="application/vnd.ms-excel.sheet.binary.macroenabled.12",
-                    use_container_width=True,
+                    width="stretch",
                     key=f"xlsb_dl_{base_name}",
                 )
-                if st.button("🔄 Convert ulang", key=f"xlsb_redo_{base_name}", use_container_width=True):
+                if st.button("🔄 Convert ulang", key=f"xlsb_redo_{base_name}", width="stretch"):
                     del st.session_state[xlsb_state_key]
                     st.rerun()
             else:
-                if st.button("📘 Convert ke .xlsb", key=f"xlsb_convert_{base_name}", use_container_width=True):
+                if st.button("📘 Convert ke .xlsb", key=f"xlsb_convert_{base_name}", width="stretch"):
                     try:
-                        with st.spinner("Menghubungi server konversi... (bisa sampai ~1 menit kalau server baru bangun)"):
+                        with st.spinner(f"Convert {len(df):,} baris ke .xlsb... (bisa beberapa menit untuk data besar, jangan tutup tab)"):
                             xlsx_bytes = to_xlsx_bytes(df)
                             xlsb_bytes = convert_via_excel_api(xlsx_bytes, base_name, target_format="xlsb")
                         st.session_state[xlsb_state_key] = xlsb_bytes
