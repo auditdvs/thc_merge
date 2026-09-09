@@ -26,6 +26,7 @@ import tempfile
 import datetime
 
 import pandas as pd
+import requests
 import streamlit as st
 
 # --------------------------------------------------------------------------------------
@@ -257,11 +258,51 @@ def _soffice_binary():
     return shutil.which("soffice") or shutil.which("libreoffice")
 
 
-def to_xlsb_bytes(df: pd.DataFrame):
+# ----------------------------------------------------------------------------------------
+# Export ke .xlsb lewat Excel Converter API sendiri (SheetJS backend -> punya writer xlsb asli)
+# ----------------------------------------------------------------------------------------
+EXCEL_API_BASE = "https://affogateo-excelconverter.hf.space"
+
+
+def convert_via_excel_api(xlsx_bytes: bytes, base_filename: str, target_format: str = "xlsb", timeout: int = 90) -> bytes:
     """
-    Konversi DataFrame -> .xlsb lewat LibreOffice headless (soffice --convert-to xlsb).
-    Mengembalikan None kalau LibreOffice tidak tersedia / tidak punya export filter xlsb
-    (banyak instalasi LibreOffice bisa MEMBACA .xlsb tapi tidak bisa MENULISNYA).
+    Panggil backend Excel Converter API (POST /api/convert/excel lalu GET /api/download/...).
+    Raise Exception dengan pesan jelas kalau gagal (space bisa lagi 'sleeping' -> perlu waktu bangun).
+    """
+    files = {
+        "file": (
+            f"{base_filename}.xlsx",
+            xlsx_bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+    data = {"targetFormat": target_format}
+
+    resp = requests.post(f"{EXCEL_API_BASE}/api/convert/excel", files=files, data=data, timeout=timeout)
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        resp.raise_for_status()
+        raise RuntimeError("Respons API bukan JSON yang valid.")
+
+    if resp.status_code != 200 or payload.get("error"):
+        raise RuntimeError(payload.get("detail", f"HTTP {resp.status_code} dari API konversi."))
+
+    conversion_id = payload.get("conversion_id")
+    out_filename = payload.get("filename")
+    if not conversion_id or not out_filename:
+        raise RuntimeError(f"Respons API tidak lengkap: {payload}")
+
+    dl = requests.get(f"{EXCEL_API_BASE}/api/download/{conversion_id}/{out_filename}", timeout=timeout)
+    dl.raise_for_status()
+    return dl.content
+
+
+def to_xlsb_bytes_local(df: pd.DataFrame):
+    """
+    (Fallback lokal, jarang berhasil) Konversi lewat LibreOffice headless.
+    Kebanyakan instalasi LibreOffice bisa MEMBACA .xlsb tapi tidak punya filter untuk MENULISNYA.
     """
     binary = _soffice_binary()
     if binary is None:
@@ -284,13 +325,6 @@ def to_xlsb_bytes(df: pd.DataFrame):
             return None
         with open(xlsb_path, "rb") as f:
             return f.read()
-
-
-@st.cache_resource(show_spinner=False)
-def xlsb_export_supported() -> bool:
-    """Probe sekali di awal apakah server ini benar-benar bisa menulis .xlsb."""
-    probe_df = pd.DataFrame([{c: "" for c in OUTPUT_COLUMNS}])
-    return to_xlsb_bytes(probe_df) is not None
 
 
 # ========================================================================================
@@ -399,14 +433,10 @@ if "merged_df" in st.session_state:
 
     st.divider()
     st.subheader("⬇️ Download")
-
-    xlsb_ok = xlsb_export_supported()
-    if not xlsb_ok:
-        st.info(
-            "Export langsung ke **.xlsb** tidak tersedia di server ini (LibreOffice di sini bisa *membaca* "
-            "`.xlsb` tapi tidak punya filter untuk *menulis*-nya — ini keterbatasan umum, bukan cuma di sini). "
-            "Gunakan **.xlsx**, lalu di Excel: **File → Save As → Excel Binary Workbook (*.xlsb)** — hanya beberapa detik."
-        )
+    st.caption(
+        "Export **.xlsb** dilakukan lewat Excel Converter API. Kalau baru pertama kali dipakai "
+        "(space lagi 'tidur'), proses convert bisa makan waktu sampai ~1 menit untuk 'membangunkan' server-nya."
+    )
 
     def download_section(label, df, base_name):
         st.markdown(f"**{label}** — `{base_name}.xlsx`")
@@ -430,17 +460,35 @@ if "merged_df" in st.session_state:
                 key=f"csv_{base_name}",
             )
         with col_b:
-            if xlsb_ok:
+            xlsb_state_key = f"xlsb_bytes_{base_name}"
+            if xlsb_state_key in st.session_state:
                 st.download_button(
                     "📘 Download .xlsb",
-                    data=to_xlsb_bytes(df),
+                    data=st.session_state[xlsb_state_key],
                     file_name=f"{base_name}.xlsb",
                     mime="application/vnd.ms-excel.sheet.binary.macroenabled.12",
                     use_container_width=True,
-                    key=f"xlsb_{base_name}",
+                    key=f"xlsb_dl_{base_name}",
                 )
+                if st.button("🔄 Convert ulang", key=f"xlsb_redo_{base_name}", use_container_width=True):
+                    del st.session_state[xlsb_state_key]
+                    st.rerun()
             else:
-                st.button("📘 .xlsb tidak tersedia", disabled=True, use_container_width=True, key=f"xlsb_disabled_{base_name}")
+                if st.button("📘 Convert ke .xlsb", key=f"xlsb_convert_{base_name}", use_container_width=True):
+                    try:
+                        with st.spinner("Menghubungi server konversi... (bisa sampai ~1 menit kalau server baru bangun)"):
+                            xlsx_bytes = to_xlsx_bytes(df)
+                            xlsb_bytes = convert_via_excel_api(xlsx_bytes, base_name, target_format="xlsb")
+                        st.session_state[xlsb_state_key] = xlsb_bytes
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Gagal convert ke .xlsb: {e}")
+                        with st.expander("Detail error (buat debug)"):
+                            st.code(str(e))
+                        st.info(
+                            "Alternatif: download .xlsx dulu, lalu di Excel: "
+                            "**File → Save As → Excel Binary Workbook (*.xlsb)**."
+                        )
 
     download_section("Document No. Terisi", st.session_state["merged_df"], st.session_state["merged_name"])
     st.write("")
