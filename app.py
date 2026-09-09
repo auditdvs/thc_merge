@@ -297,10 +297,10 @@ def xlsb_export_supported() -> bool:
 # UI
 # ========================================================================================
 
-st.title("🔀 THC Data Merger")
+st.title("THC Data Merger")
 st.caption("Gabungkan beberapa file transaksi THC bulanan (mentah/data awal) jadi satu file rapi.")
 
-with st.expander("📖 Cara pakai (tutorial)", expanded=True):
+with st.expander("Cara pakai (tutorial)", expanded=True):
     st.markdown(
         """
 1. **Download file** `.xlsb` atau tarikan langsung dari **MDIS** (biasanya bentuk `.xls`) — bisa juga `.xlsx` atau `.csv`.
@@ -324,7 +324,7 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
-process_clicked = st.button("🚀 Proses & Gabungkan", type="primary", disabled=not uploaded_files)
+process_clicked = st.button("Proses & Gabungkan", type="primary", disabled=not uploaded_files)
 
 if process_clicked and uploaded_files:
     all_records = []
